@@ -23,3 +23,20 @@ export const agentSessionImport = createEnvironmentRpcCommand(connectionAtomRunt
   label: "environment-data:agent-sessions:import",
   tag: WS_METHODS.agentSessionsImport,
 });
+
+/**
+ * Sessions a project's environment can resume, read on that environment's
+ * server. Only the resume picker subscribes, so nothing is scanned until it
+ * opens; it refreshes explicitly for sessions started while it is open.
+ */
+export const agentSessionList = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:agent-sessions:list",
+  tag: WS_METHODS.agentSessionsList,
+  staleTimeMs: 10_000,
+  idleTtlMs: 60_000,
+});
+
+export const agentSessionImportSession = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:agent-sessions:import-session",
+  tag: WS_METHODS.agentSessionsImportSession,
+});

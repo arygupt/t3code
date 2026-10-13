@@ -39,6 +39,25 @@ it("reissues imported context until a V2 run completes", () => {
   );
 });
 
+it("leaves imported history in the native session it was imported from", () => {
+  assert.isFalse(
+    shouldPrepareLegacyImportHandoff({
+      historyOrigin: "v1_import",
+      hasCompletedRun: false,
+      legacyImportItemCount: 2,
+      targetHoldsImportedHistory: true,
+    }),
+  );
+  assert.isTrue(
+    shouldPrepareLegacyImportHandoff({
+      historyOrigin: "v1_import",
+      hasCompletedRun: false,
+      legacyImportItemCount: 2,
+      targetHoldsImportedHistory: false,
+    }),
+  );
+});
+
 it("records a reissued legacy handoff on an existing provider thread", () => {
   const existingHandoffId = ContextHandoffId.make("handoff:legacy-import:existing");
   const retryHandoffId = ContextHandoffId.make("handoff:legacy-import:retry");

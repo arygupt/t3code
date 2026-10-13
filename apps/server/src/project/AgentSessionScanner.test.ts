@@ -2591,6 +2591,173 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
   });
+
+  describe("listSessions", () => {
+    it.effect("lists resumable sessions from the project root only and reads one back", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        const claudeHomePath = yield* makeTempDir("t3code-list-claude-");
+        const codexHomePath = yield* makeTempDir("t3code-list-codex-");
+        const workspace = yield* makeTempDir("t3code-list-workspace-");
+        const otherWorkspace = yield* makeTempDir("t3code-list-other-");
+        const subdirectory = path.join(workspace, "packages", "app");
+        yield* fileSystem.makeDirectory(subdirectory, { recursive: true });
+        const claudeId = "6c1f0e36-7a52-4c1d-9f0e-0d6a1b2c3d4e";
+        const codexId = "019a0000-0000-7000-8000-00000000000b";
+        const claudeTranscript = (input: {
+          readonly cwd: string;
+          readonly sessionId: string;
+          readonly prompt?: string;
+        }) =>
+          [
+            {
+              type: "user",
+              cwd: input.cwd,
+              sessionId: input.sessionId,
+              timestamp: "2026-08-23T12:00:00.000Z",
+              message: { role: "user", content: input.prompt ?? "Fix the project" },
+            },
+            { type: "ai-title", sessionId: input.sessionId, aiTitle: "Project fix" },
+            {
+              type: "assistant",
+              sessionId: input.sessionId,
+              timestamp: "2026-08-23T12:01:00.000Z",
+              message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+            },
+          ]
+            .map((record) => encodeTranscriptRecord(record))
+            .join("\n");
+        const writeClaude = (
+          directory: string,
+          sessionId: string,
+          contents: string,
+          ageMs: number,
+        ) =>
+          writeTranscript({
+            filePath: path.join(claudeHomePath, "projects", directory, `${sessionId}.jsonl`),
+            contents,
+            mtimeMs: nowMs - ageMs,
+          });
+
+        yield* writeClaude(
+          "-root",
+          claudeId,
+          claudeTranscript({ cwd: workspace, sessionId: claudeId }),
+          60_000,
+        );
+        yield* writeClaude(
+          "-sub",
+          "0f3d8a1e-2b4c-4d6e-8a0b-1c2d3e4f5a6b",
+          claudeTranscript({
+            cwd: subdirectory,
+            sessionId: "0f3d8a1e-2b4c-4d6e-8a0b-1c2d3e4f5a6b",
+          }),
+          10_000,
+        );
+        yield* writeClaude(
+          "-other",
+          "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          claudeTranscript({
+            cwd: otherWorkspace,
+            sessionId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          }),
+          10_000,
+        );
+        // Metadata without a prompt is not a resumable session.
+        yield* writeClaude(
+          "-root",
+          "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+          encodeTranscriptRecord({ type: "summary", cwd: workspace }),
+          5_000,
+        );
+        yield* writeTranscript({
+          filePath: path.join(
+            codexHomePath,
+            "sessions",
+            "2026",
+            "08",
+            "24",
+            `rollout-2026-08-24T10-00-00-${codexId}.jsonl`,
+          ),
+          contents: [
+            encodeTranscriptRecord({
+              type: "session_meta",
+              payload: { id: codexId, cwd: workspace },
+            }),
+            encodeTranscriptRecord({
+              type: "event_msg",
+              timestamp: "2026-08-24T10:00:00.000Z",
+              payload: { type: "user_message", message: "Review this code" },
+            }),
+            encodeTranscriptRecord({
+              type: "response_item",
+              timestamp: "2026-08-24T10:01:00.000Z",
+              payload: {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Looks good" }],
+              },
+            }),
+          ].join("\n"),
+          mtimeMs: nowMs - 30_000,
+        });
+
+        yield* Effect.gen(function* () {
+          const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+          const listed = yield* scanner.listSessions(workspace);
+          expect(
+            listed.sessions.map((session) => [
+              session.source,
+              session.providerSessionId,
+              session.title,
+            ]),
+          ).toEqual([
+            ["codex", codexId, "Review this code"],
+            ["claudeAgent", claudeId, "Project fix"],
+          ]);
+          expect(listed.sessions[0]?.lastActiveAt).toBe("2026-08-24T11:59:30.000Z");
+          expect(listed.truncated).toBe(false);
+
+          const read = yield* scanner.readSession({
+            workspaceRoot: workspace,
+            source: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            providerSessionId: codexId,
+          });
+          expect(read?.thread.messages.map((message) => message.text)).toEqual([
+            "Review this code",
+            "Looks good",
+          ]);
+          // A session from another directory is not this project's, even by id.
+          expect(
+            yield* scanner.readSession({
+              workspaceRoot: workspace,
+              source: "claudeAgent",
+              providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+              providerSessionId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            }),
+          ).toBeNull();
+
+          // Sessions started after a listing appear on the next one.
+          const laterId = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
+          yield* writeClaude(
+            "-root",
+            laterId,
+            claudeTranscript({ cwd: workspace, sessionId: laterId, prompt: "Next task" }),
+            0,
+          );
+          const relisted = yield* scanner.listSessions(workspace);
+          expect(relisted.sessions.map((session) => session.providerSessionId)).toEqual([
+            laterId,
+            codexId,
+            claudeId,
+          ]);
+        }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
+      }),
+    );
+  });
 });
 
 describe("parseAgentSessionTranscript", () => {

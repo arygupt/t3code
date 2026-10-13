@@ -2130,6 +2130,14 @@ describe("ClaudeAdapterV2 native session identity", () => {
       }),
   );
 
+  it.effect("resumes an imported native session on its first T3 turn", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(1, true);
+      assert.equal(openedQueries[0]?.options.resume, "native-session-identity");
+      assert.equal(openedQueries[0]?.options.sessionId, undefined);
+    }),
+  );
+
   it.effect("creates a fresh native session despite earlier provider-thread turns", () =>
     Effect.gen(function* () {
       const openedQueries = yield* openTurnWithOrdinal(4, false);

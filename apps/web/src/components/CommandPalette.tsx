@@ -66,6 +66,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  HistoryIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -133,6 +134,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
+import { openResumeSessionDialog } from "./chat/ResumeSessionDialog";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -1853,6 +1855,36 @@ function OpenCommandPaletteDialog(props: {
       icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "chat.newWithoutProject",
       run: () => startScratchThread(scratchTargetEnvironmentId),
+    });
+  }
+
+  const resumeProject =
+    contextualProjectRef === null
+      ? null
+      : (projects.find(
+          (project) =>
+            project.environmentId === contextualProjectRef.environmentId &&
+            project.id === contextualProjectRef.projectId,
+        ) ?? null);
+  if (
+    resumeProject !== null &&
+    !isScratchProject(resumeProject, scratchWorkspaceRootFor(resumeProject.environmentId)) &&
+    environments.find((environment) => environment.environmentId === resumeProject.environmentId)
+      ?.serverConfig?.environment.capabilities.agentSessionResume === true
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:resume-session",
+      searchTerms: ["resume", "continue", "session", "claude", "codex", "import", "history"],
+      title: (
+        <>
+          Resume a session in <span className="font-semibold">{resumeProject.title}</span>
+        </>
+      ),
+      icon: <HistoryIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openResumeSessionDialog(scopeProjectRef(resumeProject.environmentId, resumeProject.id));
+      },
     });
   }
 
