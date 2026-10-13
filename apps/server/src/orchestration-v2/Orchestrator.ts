@@ -49,6 +49,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  holdsImportedNativeHistory,
   latestProviderTurnForAttempt,
   orchestrationV2RunWorkStartedAt,
   ProviderInstanceId,
@@ -751,13 +752,21 @@ function visibleDeltaRunOrdinals(
   };
 }
 
+/**
+ * Imported history reaches the provider through a handoff, unless the target
+ * provider thread is still the native session the history was imported from.
+ */
 export function shouldPrepareLegacyImportHandoff(input: {
   readonly hasCompletedRun: boolean;
   readonly historyOrigin: OrchestrationV2AppThread["historyOrigin"];
   readonly legacyImportItemCount: number;
+  readonly targetHoldsImportedHistory?: boolean;
 }): boolean {
   return (
-    input.historyOrigin === "v1_import" && !input.hasCompletedRun && input.legacyImportItemCount > 0
+    input.historyOrigin === "v1_import" &&
+    !input.hasCompletedRun &&
+    input.legacyImportItemCount > 0 &&
+    input.targetHoldsImportedHistory !== true
   );
 }
 
@@ -5325,6 +5334,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           historyOrigin: projection.thread.historyOrigin,
           hasCompletedRun: latestCompletedRun !== undefined,
           legacyImportItemCount: legacyImportItems.length,
+          targetHoldsImportedHistory:
+            activeProviderThread !== undefined && holdsImportedNativeHistory(activeProviderThread),
         })
           ? yield* contextHandoffService
               .prepareLegacyImport({

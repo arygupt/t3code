@@ -26,13 +26,20 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import * as AgentSessionImporter from "../../project/AgentSessionImporter.ts";
+import * as AgentSessionScanner from "../../project/AgentSessionScanner.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
+import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
 import { CommandPolicyCapabilityUnsupportedError } from "../CommandPolicy.ts";
 import {
   ClaudeBackgroundWorkBlocksQueryReplacementError,
@@ -3555,5 +3562,159 @@ describe("orchestration v2 provider switching", () => {
         );
       }),
     ),
+  );
+
+  it.live.each([
+    { source: "codex", driver: CODEX_DRIVER, selection: CODEX_MODEL_SELECTION },
+    { source: "claudeAgent", driver: CLAUDE_DRIVER, selection: CLAUDE_MODEL_SELECTION },
+  ] as const)(
+    "resumes an imported $source session on the first prompt without replaying it",
+    ({ source, driver, selection }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace(`imported-native-${source}`);
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          const nativeSessionId = "4d6f7a2e-1b3c-4d5e-8f90-123456789abc";
+          const prompt = "Continue where we stopped.";
+          const importedThread: AgentSessionScanner.AgentSessionThread = {
+            source,
+            providerInstanceId: selection.instanceId,
+            providerSessionId: nativeSessionId,
+            title: "Native session",
+            model: selection.model,
+            createdAt: "2026-09-01T10:00:00.000Z",
+            updatedAt: "2026-09-01T10:01:00.000Z",
+            messages: [
+              {
+                role: "user",
+                text: "Remember the marker is violet.",
+                createdAt: "2026-09-01T10:00:00.000Z",
+              },
+              { role: "assistant", text: "Noted: violet.", createdAt: "2026-09-01T10:01:00.000Z" },
+            ],
+          };
+          const scanner = AgentSessionScanner.AgentSessionScanner.of({
+            scan: Effect.die("unused"),
+            recentThreads: () => Stream.empty,
+            listSessions: () => Effect.die("unused"),
+            readSession: () =>
+              Effect.succeed({
+                thread: importedThread,
+                source: {
+                  provider: source,
+                  providerInstanceId: selection.instanceId,
+                  providerSessionId: nativeSessionId,
+                  filePath: `/home/native/${nativeSessionId}.jsonl`,
+                  size: 100,
+                  mtimeMs: 2,
+                  device: 3,
+                  inode: 4,
+                  birthtimeMs: 1,
+                },
+              }),
+          });
+          const layerDatabase = SqlitePersistence.layerMemory;
+          const layerHarness = ProviderReplayHarness.layerWithRegistry(
+            {
+              name: `imported-native-${source}`,
+              runtimePolicyOverride: {
+                cwd,
+                approvalPolicy: "never",
+                sandboxPolicy: { type: "readOnly" },
+              },
+            },
+            ProviderAdapterRegistry.layerFromAdapters([
+              makeTestAdapter({
+                instanceId: selection.instanceId,
+                driver,
+                capabilities:
+                  source === "codex" ? CodexProviderCapabilitiesV2 : ClaudeProviderCapabilitiesV2,
+                modelSelection: selection,
+                responseByRunOrdinal: {},
+                capturedTurns,
+                injectedHistory,
+              }),
+            ]),
+            { databaseLayer: layerDatabase },
+          );
+          const layerImporter = AgentSessionImporter.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                layerHarness,
+                layerDatabase,
+                ProviderSessionRuntime.layer.pipe(Layer.provide(layerDatabase)),
+                IdAllocator.layer,
+                ThreadCommandExecutor.layer,
+                Layer.succeed(AgentSessionScanner.AgentSessionScanner, scanner),
+                Layer.mock(ProjectService.ProjectService)({
+                  getById: () =>
+                    Effect.succeed(Option.some({ id: projectId, workspaceRoot: cwd } as never)),
+                }),
+              ),
+            ),
+          );
+
+          const projection = yield* Effect.gen(function* () {
+            const importer = yield* AgentSessionImporter.AgentSessionImporter;
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const imported = yield* importer.importSession({
+              projectId,
+              provider: source,
+              providerInstanceId: selection.instanceId,
+              providerSessionId: nativeSessionId,
+            });
+            // Importing shows history but runs nothing.
+            yield* worker.drain();
+            assert.deepEqual((yield* orchestrator.getThreadProjection(imported.threadId)).runs, []);
+            assert.deepEqual(yield* Ref.get(capturedTurns), []);
+
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`imported-native-${source}:1`),
+              threadId: imported.threadId,
+              messageId: MessageId.make(`imported-native-${source}:1`),
+              createdBy: "user",
+              creationSource: "web",
+              text: prompt,
+              attachments: [],
+              modelSelection: selection,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* orchestrator
+              .streamStoredEventsFrom({ threadId: imported.threadId, eventType: "run.updated" })
+              .pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "run.updated" &&
+                    (event.payload.status === "completed" || event.payload.status === "failed"),
+                ),
+                Stream.runHead,
+              );
+            yield* worker.drain();
+            return yield* orchestrator.getThreadProjection(imported.threadId);
+          }).pipe(Effect.provide(Layer.mergeAll(layerHarness, layerImporter)));
+
+          assert.deepEqual(
+            projection.runs.map((run) => run.status),
+            ["completed"],
+          );
+          // The native session already holds the imported turns.
+          assert.deepEqual(projection.contextHandoffs, []);
+          assert.deepEqual(yield* Ref.get(injectedHistory), []);
+          const turns = yield* Ref.get(capturedTurns);
+          assert.equal(turns.length, 1);
+          assert.equal(turns[0]?.text, prompt);
+          assert.equal(turns[0]?.nativeThreadId, nativeSessionId);
+          assert.equal(turns[0]?.providerTurnOrdinal, 1);
+          assert.isTrue(turns[0]?.nativeThreadHasTurns);
+          const providerThread = projection.providerThreads.find(
+            (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+          );
+          assert.equal(providerThread?.nativeThreadRef?.nativeId, nativeSessionId);
+          assert.equal(providerThread?.nativeMetadata?.importedNativeId, nativeSessionId);
+        }),
+      ),
   );
 });

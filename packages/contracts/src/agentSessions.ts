@@ -1,5 +1,11 @@
 import * as Schema from "effect/Schema";
-import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /** Coding agent home directories the scanner knows how to read. */
@@ -98,10 +104,78 @@ export const AgentSessionImportResult = Schema.Struct({
 });
 export type AgentSessionImportResult = typeof AgentSessionImportResult.Type;
 
+/** Sessions recorded in the project's root directory, for choosing one to resume. */
+export const AgentSessionListInput = Schema.Struct({
+  projectId: ProjectId,
+  expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+});
+export type AgentSessionListInput = typeof AgentSessionListInput.Type;
+
+export const AgentSessionSummary = Schema.Struct({
+  provider: AgentSessionSource,
+  providerInstanceId: ProviderInstanceId,
+  providerSessionId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  model: Schema.NullOr(TrimmedNonEmptyString),
+  lastActiveAt: IsoDateTime,
+  /**
+   * T3 thread already bound to this native session. Choosing the session opens
+   * that thread instead of importing the session a second time.
+   */
+  thread: Schema.NullOr(Schema.Struct({ id: ThreadId, archived: Schema.Boolean })),
+});
+export type AgentSessionSummary = typeof AgentSessionSummary.Type;
+
+export const AgentSessionListResult = Schema.Struct({
+  sessions: Schema.Array(AgentSessionSummary),
+  /** Older or very large transcripts were left out to keep the read bounded. */
+  truncated: Schema.optional(Schema.Boolean),
+});
+export type AgentSessionListResult = typeof AgentSessionListResult.Type;
+
+export const AgentSessionImportSessionInput = Schema.Struct({
+  projectId: ProjectId,
+  expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  provider: AgentSessionSource,
+  providerInstanceId: ProviderInstanceId,
+  providerSessionId: TrimmedNonEmptyString,
+});
+export type AgentSessionImportSessionInput = typeof AgentSessionImportSessionInput.Type;
+
+/** `imported` is false when an existing T3 thread already owned the session. */
+export const AgentSessionImportSessionResult = Schema.Struct({
+  threadId: ThreadId,
+  imported: Schema.Boolean,
+});
+export type AgentSessionImportSessionResult = typeof AgentSessionImportSessionResult.Type;
+
+export class AgentSessionUnavailableError extends Schema.TaggedError<AgentSessionUnavailableError>()(
+  "AgentSessionUnavailableError",
+  {
+    providerSessionId: Schema.String,
+    reason: Schema.Literals(["not-found", "deleted", "other-account", "replaced", "unresumable"]),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "deleted":
+        return "This session belongs to a deleted T3 thread.";
+      case "other-account":
+        return "A T3 thread on another provider account already uses this session.";
+      case "replaced":
+        return "This session's T3 thread now continues in a newer provider session.";
+      case "unresumable":
+        return "This session cannot be resumed.";
+      case "not-found":
+        return "This session is no longer in the project's history.";
+    }
+  }
+}
+
 export class AgentSessionScanError extends Schema.TaggedError<AgentSessionScanError>()(
   "AgentSessionScanError",
   {
-    operation: Schema.Literals(["read-settings", "read-projects"]),
+    operation: Schema.Literals(["read-settings", "read-projects", "import-session"]),
     cause: Schema.Defect(),
   },
 ) {

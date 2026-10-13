@@ -31,6 +31,25 @@ folder, so the files the agent wrote stay until you delete them. Branch, worktre
 these folders are not Git repositories. This is unavailable when the data
 directory itself sits inside a Git checkout.
 
+### Resume a Claude Code or Codex session
+
+To continue a conversation you started in the Claude Code or Codex CLI, click
+**resume a session** under a new thread's heading, or choose **Resume a session
+in** from the command palette. The list shows the 50 most recent sessions that
+ran in the project's folder on the project's machine, newest first. Search by
+title, provider, or model, and use **Refresh** for sessions started after the
+list opened.
+
+Choosing a session shows its conversation in a new thread without running
+anything. Your next message continues the same provider session, with its full
+context. A session that already has a T3 Code thread opens that thread instead.
+Quit the session in the CLI first; T3 Code and the CLI should not write to it at
+the same time.
+
+Only sessions started in the project folder itself are listed, not sessions from
+its subfolders or other worktrees. The thread runs in the project folder. This
+is not available on mobile yet.
+
 ### Start in the background
 
 In a desktop browser or the desktop app, press `Cmd+Enter` on macOS or `Ctrl+Enter`

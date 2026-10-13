@@ -922,9 +922,27 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Version 2 scopes provider-derived item ids by provider instance. */
   itemIdentityVersion: Schema.optional(Schema.Literal(2)),
+  /**
+   * Native session this row was imported from. That session already holds the
+   * imported history, so T3 resumes it instead of creating it or replaying it.
+   */
+  importedNativeId: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationV2ProviderThreadNativeMetadata =
   typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
+
+/**
+ * Whether the provider thread is still bound to the native session it was
+ * imported from. A fresh native session bound later does not hold that history.
+ */
+export function holdsImportedNativeHistory(
+  providerThread: Pick<OrchestrationV2ProviderThread, "nativeThreadRef" | "nativeMetadata">,
+): boolean {
+  const importedNativeId = providerThread.nativeMetadata?.importedNativeId;
+  return (
+    importedNativeId !== undefined && providerThread.nativeThreadRef?.nativeId === importedNativeId
+  );
+}
 
 export const OrchestrationV2ProviderGoalStatus = Schema.Literals([
   "active",

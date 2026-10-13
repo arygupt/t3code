@@ -2,6 +2,7 @@ import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   CommandId,
+  holdsImportedNativeHistory,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
@@ -1251,8 +1252,10 @@ export const layer: Layer.Layer<
           ) + 1,
         // Legacy accepted attempts have no native id. They count only before
         // a replacement, while no accepted attempt records a native identity.
+        // An imported native session already has turns before T3's first one.
         nativeThreadHasTurns:
           nativeInputRunIds.size > 0 ||
+          holdsImportedNativeHistory(runningProviderThread) ||
           (legacyInputRunIds.size > 0 &&
             sameNativeThread &&
             !acceptedAttempts.some((source) => source.nativeThreadId !== undefined)),

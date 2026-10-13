@@ -28,6 +28,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
+import { openResumeSessionDialog } from "./ResumeSessionDialog";
 import {
   Combobox,
   ComboboxEmpty,
@@ -402,6 +403,35 @@ export function DraftHeroHeadline({
       </Tooltip>
     ) : null;
 
+  // Continuing an existing Claude Code or Codex session is the other way to
+  // start. The picker reads sessions on the project's own environment.
+  const canResumeSession =
+    activeProject !== null &&
+    !isScratchDraft &&
+    environments.find((environment) => environment.environmentId === activeProject.environmentId)
+      ?.serverConfig?.environment.capabilities.agentSessionResume === true;
+  const resumeSession =
+    canResumeSession && activeProject !== null ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <InlineButton
+              tone="muted"
+              className="pointer-events-auto"
+              onClick={() =>
+                openResumeSessionDialog(
+                  scopeProjectRef(activeProject.environmentId, activeProject.id),
+                )
+              }
+            />
+          }
+        >
+          {orStartWithoutProject === null ? "or resume a session" : "resume a session"}
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">Continue a Claude Code or Codex session</TooltipPopup>
+      </Tooltip>
+    ) : null;
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
       <h1
@@ -420,9 +450,15 @@ export function DraftHeroHeadline({
       </h1>
       {/* Reserved whenever threads can skip a project, so the heading does not
           move. Without a project, the picker moves here to choose one. */}
-      {scratchWorkspaceRoot === null ? null : (
-        <p className="mt-2 flex h-6 items-center text-sm">
+      {scratchWorkspaceRoot === null && resumeSession === null ? null : (
+        <p className="mt-2 flex h-6 items-center gap-1.5 text-sm">
           {isScratchDraft ? projectSelector : orStartWithoutProject}
+          {orStartWithoutProject !== null && resumeSession !== null ? (
+            <span aria-hidden className="text-muted-foreground/50">
+              ·
+            </span>
+          ) : null}
+          {resumeSession}
         </p>
       )}
     </div>
